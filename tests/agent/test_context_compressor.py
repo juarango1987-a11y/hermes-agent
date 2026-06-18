@@ -3,10 +3,13 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
+import json
+
 from agent.context_compressor import (
     ContextCompressor,
     HISTORICAL_TASK_HEADING,
     SUMMARY_PREFIX,
+    _summarize_tool_result,
 )
 
 
@@ -229,6 +232,39 @@ class TestGenerateSummaryNoneContent:
         ]
         result = c.compress(msgs)
         assert len(result) < len(msgs)
+
+
+class TestSummarizeToolResultNonStringArgs:
+    """Regression: tool_args from the model may carry non-string values.
+
+    Observed crash (2026-06-17, agent.log): a terminal tool call whose
+    ``command`` arg was a bool reached _summarize_tool_result during the
+    static-fallback compression pass and raised
+    ``TypeError: object of type 'bool' has no len()``, aborting the outer
+    conversation loop. The command value must be coerced before len()/slicing.
+    """
+
+    def test_terminal_command_bool_does_not_crash(self):
+        out = _summarize_tool_result(
+            "terminal", json.dumps({"command": True}), '{"exit_code": 0}'
+        )
+        assert isinstance(out, str)
+        assert out.startswith("[terminal]")
+
+    def test_terminal_command_int_does_not_crash(self):
+        out = _summarize_tool_result(
+            "terminal", json.dumps({"command": 12345}), '{"exit_code": 1}'
+        )
+        assert isinstance(out, str)
+        assert out.startswith("[terminal]")
+
+    def test_terminal_long_string_command_still_truncated(self):
+        long_cmd = "echo " + "x" * 200
+        out = _summarize_tool_result(
+            "terminal", json.dumps({"command": long_cmd}), '{"exit_code": 0}'
+        )
+        assert "..." in out
+        assert long_cmd not in out
 
 
 class TestNonStringContent:

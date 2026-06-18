@@ -491,7 +491,7 @@ def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) ->
     line_count = content.count("\n") + 1 if content.strip() else 0
 
     if tool_name == "terminal":
-        cmd = args.get("command", "")
+        cmd = str(args.get("command", ""))
         if len(cmd) > 80:
             cmd = cmd[:77] + "..."
         exit_match = re.search(r'"exit_code"\s*:\s*(-?\d+)', content)
