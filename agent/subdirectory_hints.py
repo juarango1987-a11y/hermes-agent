@@ -144,7 +144,10 @@ class SubdirectoryHintTracker:
                 if parent == p:
                     break  # filesystem root
                 p = parent
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError):
+            # RuntimeError: Path.expanduser() raises it when a "~" token can't
+            # be resolved to a home directory. Hint discovery is best-effort and
+            # must never crash the tool call, so swallow it like the others.
             pass
 
     def _extract_paths_from_command(self, cmd: str, candidates: Set[Path]):
