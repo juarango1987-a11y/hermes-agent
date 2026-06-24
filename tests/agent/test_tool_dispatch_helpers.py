@@ -8,13 +8,69 @@ NOT a regex scan — it's an unconditional architectural mark on every result
 from a known-untrusted source.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from agent.tool_dispatch_helpers import (
+    _extract_parallel_scope_path,
     _is_untrusted_tool,
     _maybe_wrap_untrusted,
+    _should_parallelize_tool_batch,
     make_tool_result_message,
 )
+
+
+def _tc(name, arguments):
+    """Build a SimpleNamespace mimicking an OpenAI tool-call object."""
+    return SimpleNamespace(function=SimpleNamespace(name=name, arguments=arguments))
+
+
+# =========================================================================
+# Parallel-dispatch eligibility must never crash on a bad path token
+# =========================================================================
+
+
+class TestParallelScopePathResilience:
+    """A model-supplied ``path`` containing ``~`` must not crash dispatch when
+    HOME is unresolvable. ``Path.expanduser()`` raises ``RuntimeError`` in that
+    case (#32612 sibling of the subdirectory_hints fix). Parallel-eligibility is
+    a best-effort hint, so it must degrade to sequential, never propagate."""
+
+    def test_extract_scope_path_swallows_expanduser_runtimeerror(self, monkeypatch):
+        from pathlib import Path
+
+        def _boom(self):
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.setattr(Path, "expanduser", _boom)
+        # Must return None (→ caller falls back to sequential), not raise.
+        assert _extract_parallel_scope_path("read_file", {"path": "~/a.txt"}) is None
+
+    def test_should_parallelize_batch_survives_unresolvable_home(self, monkeypatch):
+        from pathlib import Path
+
+        def _boom(self):
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.setattr(Path, "expanduser", _boom)
+        calls = [
+            _tc("read_file", '{"path": "~/a.txt"}'),
+            _tc("read_file", '{"path": "~/b.txt"}'),
+        ]
+        # Pre-fix this raised RuntimeError, crashing _execute_tool_calls.
+        assert _should_parallelize_tool_batch(calls) is False
+
+    def test_absolute_paths_still_scope_and_parallelize(self):
+        # No-regression: normal absolute paths still resolve to a scope path
+        # and two non-overlapping read_file calls remain parallel-eligible.
+        scope = _extract_parallel_scope_path("read_file", {"path": "/tmp/a.txt"})
+        assert scope is not None and scope.is_absolute()
+        calls = [
+            _tc("read_file", '{"path": "/tmp/a.txt"}'),
+            _tc("read_file", '{"path": "/tmp/b.txt"}'),
+        ]
+        assert _should_parallelize_tool_batch(calls) is True
 
 
 # =========================================================================

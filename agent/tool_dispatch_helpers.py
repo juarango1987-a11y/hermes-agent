@@ -155,12 +155,20 @@ def _extract_parallel_scope_path(tool_name: str, function_args: dict) -> Optiona
     if not isinstance(raw_path, str) or not raw_path.strip():
         return None
 
-    expanded = Path(raw_path).expanduser()
-    if expanded.is_absolute():
-        return Path(os.path.abspath(str(expanded)))
-
-    # Avoid resolve(); the file may not exist yet.
-    return Path(os.path.abspath(str(Path.cwd() / expanded)))
+    try:
+        expanded = Path(raw_path).expanduser()
+        if expanded.is_absolute():
+            return Path(os.path.abspath(str(expanded)))
+        # Avoid resolve(); the file may not exist yet.
+        return Path(os.path.abspath(str(Path.cwd() / expanded)))
+    except (OSError, ValueError, RuntimeError):
+        # RuntimeError: Path.expanduser() raises "Could not determine home
+        # directory" for a "~" token when HOME is unresolvable; OSError/ValueError
+        # cover other malformed paths. This is only a parallel-eligibility hint —
+        # returning None makes the caller fall back to sequential dispatch, which
+        # must never be a crashable path (mirrors the json.loads guard above and
+        # the subdirectory_hints fix). (#32612 sibling)
+        return None
 
 
 def _paths_overlap(left: Path, right: Path) -> bool:
