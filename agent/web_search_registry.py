@@ -52,7 +52,19 @@ def register_provider(provider: WebSearchProvider) -> None:
     a debug message — makes hot-reload scenarios (tests, dev loops) behave
     predictably.
     """
-    if not isinstance(provider, WebSearchProvider):
+    # Resolve the base class at call time instead of trusting the reference
+    # frozen by the module-level import above. When ``agent.web_search_provider``
+    # is reloaded (test suites / plugin hot-reload) the frozen class diverges
+    # from the one provider subclasses and the plugin loader now see, so a
+    # genuinely-valid provider fails this isinstance check and the raised
+    # TypeError escapes the loader guard, crashing plugin load with
+    # "Failed to load plugin '<name>': register_provider() expects a
+    # WebSearchProvider instance, got <X>". Re-importing keeps this guard
+    # consistent with hermes_cli.plugins.register_web_search_provider, which
+    # already resolves the class at call time.
+    from agent.web_search_provider import WebSearchProvider as _BaseProvider
+
+    if not isinstance(provider, _BaseProvider):
         raise TypeError(
             f"register_provider() expects a WebSearchProvider instance, "
             f"got {type(provider).__name__}"
