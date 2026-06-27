@@ -507,6 +507,25 @@ class TestPostToolCallHook:
         tracked_file = _isolate_env / "disk-cleanup" / "tracked.json"
         assert not tracked_file.exists() or tracked_file.read_text().strip() == "[]"
 
+    def test_overlong_path_candidate_does_not_raise(self, _isolate_env):
+        """Regression: a candidate path with a component over NAME_MAX makes
+        os.stat raise OSError(ENAMETOOLONG), which Path.exists() does not
+        swallow. The post_tool_call hook must stay best-effort and not crash.
+        """
+        pi = _load_plugin_init()
+        # 300-byte single component exceeds NAME_MAX (255) on macOS/Linux.
+        overlong = "/" + "a" * 300
+        # Must not raise (the bug propagated OSError out of the hook).
+        pi._on_post_tool_call(
+            tool_name="terminal",
+            args={"command": f"ls {overlong}"},
+            result="",
+            task_id="t5", session_id="s5",
+        )
+        # Nothing should have been tracked from the bogus path.
+        tracked_file = _isolate_env / "disk-cleanup" / "tracked.json"
+        assert not tracked_file.exists() or tracked_file.read_text().strip() == "[]"
+
 
 class TestOnSessionEndHook:
     def test_runs_quick_when_test_files_tracked(self, _isolate_env):

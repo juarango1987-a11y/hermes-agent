@@ -73,16 +73,22 @@ def _attempt_track(path_str: str, task_id: str, session_id: str) -> None:
     """Best-effort auto-track. Never raises."""
     try:
         p = Path(path_str).expanduser()
+        if not p.exists():
+            return
+        category = dg.guess_category(p)
+        if category is None:
+            return
+        newly = dg.track(str(p), category, silent=True)
+        if newly:
+            _record_track(task_id, session_id, p, category)
     except Exception:
+        # Candidates pulled from arbitrary terminal output can be malformed
+        # (component over NAME_MAX, embedded newlines, ...). os.stat then
+        # raises OSError(ENAMETOOLONG), which Path.exists() does NOT swallow,
+        # and the same input can blow up guess_category/track. Tracking is
+        # best-effort, so swallow everything to honour the "Never raises"
+        # contract and keep the post_tool_call hook from crashing.
         return
-    if not p.exists():
-        return
-    category = dg.guess_category(p)
-    if category is None:
-        return
-    newly = dg.track(str(p), category, silent=True)
-    if newly:
-        _record_track(task_id, session_id, p, category)
 
 
 def _extract_paths_from_write_file(args: Dict[str, Any]) -> Set[str]:
