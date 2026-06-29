@@ -411,6 +411,23 @@ class TestScriptPathContainment:
         assert success is True
         assert output == "abs ok"
 
+    def test_tilde_path_unresolvable_home_degrades_to_failure(self, cron_env, monkeypatch):
+        """A "~"-prefixed script path must NOT crash _run_job_script when HOME
+        is unresolvable (cron/container with no passwd entry). Path.expanduser()
+        raises RuntimeError in that case; the function's contract is
+        tuple[bool, str], so it must degrade to a clean failure, never propagate.
+        Sibling of the runtime_cwd / subdirectory_hints expanduser fixes."""
+        from cron.scheduler import _run_job_script
+
+        def _raise_home(self):
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.setattr(Path, "expanduser", _raise_home)
+
+        success, output = _run_job_script("~/evil.py")
+        assert success is False
+        assert "invalid script path" in output.lower()
+
     @pytest.mark.skipif(
         sys.platform == "win32",
         reason="Symlinks require elevated privileges on Windows",

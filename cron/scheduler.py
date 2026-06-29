@@ -1959,7 +1959,17 @@ def _run_job_script(
     scripts_dir.mkdir(parents=True, exist_ok=True)
     scripts_dir_resolved = scripts_dir.resolve()
 
-    raw = Path(script_path).expanduser()
+    try:
+        raw = Path(script_path).expanduser()
+    except (OSError, ValueError, RuntimeError) as e:
+        # Path.expanduser() raises RuntimeError ("Could not determine home
+        # directory") for a "~"-prefixed path when HOME is unresolvable — the
+        # exact cron/container case with no passwd entry. This function's
+        # contract is tuple[bool, str]: every other bad-path case below returns
+        # a failure message rather than raising, so a bad "~" must degrade to
+        # that too, never crash the detached job run. Mirrors the runtime_cwd /
+        # subdirectory_hints expanduser fixes.
+        return False, f"Invalid script path {script_path!r}: {e}"
     if raw.is_absolute():
         path = raw.resolve()
     else:
