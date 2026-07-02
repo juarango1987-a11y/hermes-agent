@@ -810,6 +810,14 @@ def _coerce_json(value: str, expected_python_type: type):
 
 def _coerce_number(value: str, integer_only: bool = False):
     """Try to parse *value* as a number.  Returns original string on failure."""
+    # Exact-integer fast path: float() has a 53-bit mantissa, so integer
+    # strings above 2**53 (Discord snowflakes, session/message IDs, epoch-ms
+    # timestamps) get silently rounded if routed through float() before int().
+    # Parse as int first to preserve arbitrary-precision integers exactly.
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        pass
     try:
         f = float(value)
     except (ValueError, OverflowError):
