@@ -250,6 +250,36 @@ class CopilotACPClientSafetyTests(unittest.TestCase):
         self.assertIn("error", response)
         self.assertFalse(outside.exists())
 
+    def _read_with(self, params_extra: dict) -> str:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            target = root / "five.txt"
+            target.write_text("l1\nl2\nl3\nl4\nl5\n")
+            response = self._dispatch(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 6,
+                    "method": "fs/read_text_file",
+                    "params": {"path": str(target), **params_extra},
+                },
+                cwd=str(root),
+            )
+        return (response.get("result") or {}).get("content") or ""
+
+    def test_read_text_file_limit_without_line_is_honored(self) -> None:
+        # limit alone must bound the read to the first N lines (not whole file).
+        self.assertEqual(self._read_with({"limit": 2}), "l1\nl2\n")
+
+    def test_read_text_file_line_one_with_limit_is_honored(self) -> None:
+        # line=1 + limit=2 must return the first 2 lines, not the whole file.
+        self.assertEqual(self._read_with({"line": 1, "limit": 2}), "l1\nl2\n")
+
+    def test_read_text_file_line_offset_without_limit_reads_to_end(self) -> None:
+        self.assertEqual(self._read_with({"line": 3}), "l3\nl4\nl5\n")
+
+    def test_read_text_file_no_bounds_returns_whole_file(self) -> None:
+        self.assertEqual(self._read_with({}), "l1\nl2\nl3\nl4\nl5\n")
+
 
 if __name__ == "__main__":
     unittest.main()
