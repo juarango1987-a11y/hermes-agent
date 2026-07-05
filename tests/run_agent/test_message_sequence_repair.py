@@ -710,3 +710,65 @@ def test_sanitize_preserves_distinct_tool_call_ids():
     assistant = [m for m in out if m.get("role") == "assistant"][0]
     assert [tc["id"] for tc in assistant["tool_calls"]] == ["call_A", "call_B"]
     assert sorted(m["tool_call_id"] for m in out if m.get("role") == "tool") == ["call_A", "call_B"]
+
+
+def test_sanitize_never_emits_empty_tool_calls_from_cross_message_dedup():
+    """Cross-message duplicate tool_call_id must NOT leave an assistant message
+    with an empty ``tool_calls: []`` array (#58327 follow-up).
+
+    A crash/resume full-turn replay produces two DISTINCT content-less
+    assistant messages both carrying the same tool_call_id. The dedup pass
+    collapses the second one's only tool_call as a duplicate; naively that
+    yields ``{"role": "assistant", "content": None, "tool_calls": []}`` — itself
+    a malformed message that strict providers (DeepSeek) reject with the same
+    HTTP 400 the dedup exists to prevent. The content-less turn must be dropped
+    outright, and the surviving call must stay paired with its (single) result.
+    """
+    from agent.agent_runtime_helpers import sanitize_api_messages
+
+    messages = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "call_X", "type": "function",
+                         "function": {"name": "foo", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_X", "content": "resA"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "call_X", "type": "function",
+                         "function": {"name": "foo", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_X", "content": "resB duplicate"},
+    ]
+    out = sanitize_api_messages(list(messages))
+
+    # No assistant message may carry an empty tool_calls list.
+    assert not any(
+        m.get("role") == "assistant" and m.get("tool_calls") == []
+        for m in out
+    )
+    # Exactly one assistant tool_call and one paired tool result survive.
+    asst_with_calls = [m for m in out if m.get("role") == "assistant" and m.get("tool_calls")]
+    assert len(asst_with_calls) == 1
+    assert [tc["id"] for tc in asst_with_calls[0]["tool_calls"]] == ["call_X"]
+    tool_ids = [m["tool_call_id"] for m in out if m.get("role") == "tool"]
+    assert tool_ids == ["call_X"]
+
+
+def test_sanitize_keeps_text_content_when_all_tool_calls_duplicated():
+    """If a fully-duplicated assistant turn still carries textual content, the
+    content is preserved as a plain assistant message (tool_calls dropped, not
+    emitted as an empty list)."""
+    from agent.agent_runtime_helpers import sanitize_api_messages
+
+    messages = [
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "call_Z", "type": "function",
+                         "function": {"name": "foo", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_Z", "content": "r"},
+        {"role": "assistant", "content": "let me retry that",
+         "tool_calls": [{"id": "call_Z", "type": "function",
+                         "function": {"name": "foo", "arguments": "{}"}}]},
+    ]
+    out = sanitize_api_messages(list(messages))
+    kept = [m for m in out if m.get("role") == "assistant" and m.get("content") == "let me retry that"]
+    assert len(kept) == 1
+    assert kept[0].get("tool_calls", []) == []  # no dangling empty list either
+    assert not any(m.get("tool_calls") == [] for m in out)
