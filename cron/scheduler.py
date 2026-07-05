@@ -1853,7 +1853,9 @@ def _get_script_timeout() -> int:
     return _DEFAULT_SCRIPT_TIMEOUT
 
 
-def _run_job_script(script_path: str) -> tuple[bool, str]:
+def _run_job_script(
+    script_path: str, cwd_override: Optional[str] = None
+) -> tuple[bool, str]:
     """Execute a cron job's data-collection script and capture its output.
 
     Scripts must reside within HERMES_HOME/scripts/.  Both relative and
@@ -1879,6 +1881,14 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
         script_path: Path to the script.  Relative paths are resolved
             against HERMES_HOME/scripts/.  Absolute and ~-prefixed paths
             are also validated to ensure they stay within the scripts dir.
+        cwd_override: Optional working directory for the subprocess.  When
+            supplied (and only then) it becomes the child's ``cwd`` so a
+            no_agent job's ``workdir`` can give scripts predictable relative
+            paths.  Passed as the per-subprocess ``cwd=`` — it never mutates
+            the parent process cwd, so it cannot corrupt a concurrently
+            running workdir-less job's terminal cwd.  Defaults to the
+            script's own directory (unchanged behaviour for all callers that
+            do not set it).
 
     Returns:
         (success, output) — on failure *output* contains the error message so the
@@ -1944,7 +1954,7 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             timeout=script_timeout,
-            cwd=str(path.parent),
+            cwd=cwd_override or str(path.parent),
             env=_sanitize_subprocess_env(os.environ.copy()),
             **popen_kwargs,
         )
@@ -2359,24 +2369,19 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
 
         # Apply workdir if configured — lets scripts use predictable relative
         # paths. For no_agent jobs this is just the subprocess cwd (not an
-        # agent TERMINAL_CWD bridge).
+        # agent TERMINAL_CWD bridge). It is passed straight to the subprocess
+        # as its per-child cwd rather than via os.chdir(): a process-global
+        # os.chdir() here runs OUTSIDE the terminal RW-cwd lock and, because
+        # tick() dispatches workdir jobs to the sequential pool while
+        # workdir-less jobs run concurrently on the parallel pool, would leak
+        # this job's cwd into a concurrent workdir-less job's terminal tool
+        # (which falls back to os.getcwd()). A subprocess cwd= has no such
+        # global side effect.
         _job_workdir = (job.get("workdir") or "").strip() or None
-        _prior_cwd = None
-        if _job_workdir and Path(_job_workdir).is_dir():
-            _prior_cwd = os.getcwd()
-            try:
-                os.chdir(_job_workdir)
-            except OSError:
-                _prior_cwd = None
+        if _job_workdir and not Path(_job_workdir).is_dir():
+            _job_workdir = None  # non-existent workdir → fall back to script dir
 
-        try:
-            ok, output = _run_job_script(script_path)
-        finally:
-            if _prior_cwd is not None:
-                try:
-                    os.chdir(_prior_cwd)
-                except OSError:
-                    pass
+        ok, output = _run_job_script(script_path, cwd_override=_job_workdir)
 
         now_iso = _hermes_now().strftime("%Y-%m-%d %H:%M:%S")
 
