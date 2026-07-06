@@ -1511,6 +1511,23 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
             continue
 
         next_run = job.get("next_run_at")
+        if next_run:
+            # A hand-edited or migrated jobs.json can carry a next_run_at that
+            # is not valid ISO-8601 (e.g. "soon", "2026/02/03", or a bare
+            # number). Parsing it below would raise and abort the entire due
+            # scan, silently stalling *every* job on every tick. Treat an
+            # unparseable value as unset so the recovery/skip logic below
+            # contains the damage to this one record.
+            try:
+                datetime.fromisoformat(next_run)
+            except (ValueError, TypeError):
+                logger.warning(
+                    "Job '%s' has an invalid next_run_at (%r); treating as "
+                    "unset and recovering from schedule.",
+                    job.get("name", job.get("id")),
+                    next_run,
+                )
+                next_run = None
         if not next_run:
             schedule = job.get("schedule", {})
             kind = schedule.get("kind")
