@@ -61,6 +61,26 @@ def is_native_gemini_base_url(base_url: str) -> bool:
     return not normalized.endswith("/openai")
 
 
+# Provider names that resolve to the Gemini provider profile — the canonical
+# ``gemini`` plus every alias registered in
+# ``plugins/model-providers/gemini/__init__.py`` (aliases=("google", ...)).
+# All of them speak the native Gemini REST API when pointed at a native
+# base_url, so client selection must treat the aliases exactly like "gemini".
+# Gating native-client selection on the canonical name alone let a request
+# under an alias (e.g. "google") fall through to the plain OpenAI client, which
+# forwards ``extra_body.thinking_config`` verbatim; Gemini's native endpoint
+# then rejects the whole request with HTTP 400 "Unknown name 'thinking_config':
+# Cannot find field."
+GEMINI_PROVIDER_NAMES = frozenset(
+    {"gemini", "google", "google-gemini", "google-ai-studio"}
+)
+
+
+def is_gemini_provider(provider: Any) -> bool:
+    """Return True when ``provider`` resolves to the Gemini provider profile."""
+    return str(provider or "").strip().lower() in GEMINI_PROVIDER_NAMES
+
+
 def probe_gemini_tier(
     api_key: str,
     base_url: str = DEFAULT_GEMINI_BASE_URL,
