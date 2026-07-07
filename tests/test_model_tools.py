@@ -458,6 +458,35 @@ class TestCoerceNumberInfNan:
         assert _coerce_number("3.14") == 3.14
         assert _coerce_number("1e3") == 1000
 
+
+class TestCoerceNumberLargeIntPrecision:
+    """_coerce_number must not lose precision on large integer strings.
+
+    Routing an integer string through float() before int() rounds any value
+    above 2**53 (float's exact-integer ceiling): Discord snowflakes,
+    session/message IDs, and epoch-millisecond timestamps arrive as strings
+    from open-weight models and must round-trip exactly.
+    """
+
+    def test_snowflake_id_round_trips_exactly(self):
+        from model_tools import _coerce_number
+        # A realistic Discord snowflake (> 2**53). Via float() this rounds to
+        # ...768; int() preserves it.
+        assert _coerce_number("1234567890123456789") == 1234567890123456789
+
+    def test_just_above_float_exact_ceiling(self):
+        from model_tools import _coerce_number
+        # 2**53 + 1 is the smallest integer float() cannot represent exactly.
+        assert _coerce_number("9007199254740993") == 9007199254740993
+
+    def test_integer_only_large_id_round_trips_exactly(self):
+        from model_tools import _coerce_number
+        assert _coerce_number("1234567890123456789", integer_only=True) == 1234567890123456789
+
+    def test_result_type_is_int_not_float(self):
+        from model_tools import _coerce_number
+        assert isinstance(_coerce_number("9007199254740993"), int)
+
 class TestDisabledToolsetsPlatformBundle:
     """Regression test for #33924: disabling a platform bundle (hermes-*)
     must not remove core tools from other enabled toolsets."""
