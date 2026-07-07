@@ -325,3 +325,38 @@ class TestOutsideWorkspaceRejection:
         outside.mkdir(exist_ok=True)
         tracker = SubdirectoryHintTracker(working_dir=str(project))
         assert tracker._is_valid_subdir(outside) is False
+
+
+class TestExpanduserRuntimeError:
+    """Regression: Path.expanduser() raises RuntimeError (not OSError/ValueError)
+    when a "~" token cannot be resolved to a home directory. Hint discovery is
+    best-effort and must swallow it rather than crash the tool call."""
+
+    def test_expanduser_runtimeerror_does_not_crash(self, project):
+        """A terminal command with an unresolvable "~" token must not raise."""
+        tracker = SubdirectoryHintTracker(working_dir=str(project))
+        orig = Path.expanduser
+
+        def boom(self):
+            if str(self).startswith("~"):
+                raise RuntimeError("Could not determine home directory.")
+            return orig(self)
+
+        with patch.object(Path, "expanduser", boom):
+            # Without the fix this propagates RuntimeError and crashes the call.
+            result = tracker.check_tool_call("terminal", {"command": "cat ~/foo/bar.txt"})
+        assert result is None
+
+    def test_expanduser_runtimeerror_direct_path_arg(self, project):
+        """Same protection on a direct path arg (read_file path="~/x")."""
+        tracker = SubdirectoryHintTracker(working_dir=str(project))
+        orig = Path.expanduser
+
+        def boom(self):
+            if str(self).startswith("~"):
+                raise RuntimeError("Could not determine home directory.")
+            return orig(self)
+
+        with patch.object(Path, "expanduser", boom):
+            result = tracker.check_tool_call("read_file", {"path": "~/foo/bar.txt"})
+        assert result is None
