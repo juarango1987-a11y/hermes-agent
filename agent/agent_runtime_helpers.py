@@ -2554,7 +2554,30 @@ def sanitize_api_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
                     seen_assistant_call_ids.add(cid)
                 kept_tcs.append(tc)
             if len(kept_tcs) != len(msg.get("tool_calls") or []):
-                msg = {**msg, "tool_calls": kept_tcs}
+                if kept_tcs:
+                    msg = {**msg, "tool_calls": kept_tcs}
+                else:
+                    # Every tool_call in this assistant message was a cross-
+                    # message duplicate (e.g. a crash/resume full-turn replay).
+                    # Emitting {"tool_calls": []} would be a NEW malformed
+                    # message — an empty tool_calls array with no real content —
+                    # which strict providers (DeepSeek) also reject with HTTP
+                    # 400, re-introducing the very failure #58327 fixes. Keep
+                    # the turn only if it still carries textual content (drop the
+                    # now-empty tool_calls key); otherwise drop the content-less
+                    # turn. Its (duplicate) tool result, if any, is dropped by
+                    # the tool branch below since the id is already seen.
+                    content = msg.get("content")
+                    # Conservatively keep any truthy content (text, content
+                    # parts, provider-specific shapes); only a genuinely empty
+                    # turn (None/""/whitespace/[]) is dropped.
+                    has_content = bool(content) and not (
+                        isinstance(content, str) and not content.strip()
+                    )
+                    if has_content:
+                        msg = {k: v for k, v in msg.items() if k != "tool_calls"}
+                    else:
+                        continue
             deduped.append(msg)
         elif role == "tool":
             cid = (msg.get("tool_call_id") or "").strip()
