@@ -120,6 +120,22 @@ class TestRegistration:
         assert transcription_registry.get_provider("openrouter") is p2
         assert "re-registered" in caplog.text
 
+    def test_register_survives_reloaded_base_class(self, monkeypatch):
+        # Simulate a reload of agent.transcription_provider: the registry's
+        # module-level TranscriptionProvider binding becomes a stale class
+        # object that diverges from the one a genuine provider subclasses. The
+        # guard must resolve the base at call time, so a valid provider still
+        # registers instead of raising TypeError (the bug under hot-reload).
+        class _StaleBase:
+            pass
+
+        monkeypatch.setattr(
+            transcription_registry, "TranscriptionProvider", _StaleBase
+        )
+        provider = _FakeProvider(name="reloaded")  # real TranscriptionProvider subclass
+        transcription_registry.register_provider(provider)
+        assert transcription_registry.get_provider("reloaded") is provider
+
 
 # ---------------------------------------------------------------------------
 # Lookup

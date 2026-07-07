@@ -65,7 +65,20 @@ def register_provider(provider: TranscriptionProvider) -> None:
     logs a debug message — makes hot-reload scenarios (tests, dev
     loops) behave predictably.
     """
-    if not isinstance(provider, TranscriptionProvider):
+    # Resolve the base class at call time rather than trusting the module-level
+    # ``TranscriptionProvider`` binding frozen when this module was first
+    # imported. When ``agent.transcription_provider`` is reloaded (test suites /
+    # plugin hot-reload) the frozen class diverges from the one a genuine
+    # provider subclasses and the plugin loader now sees, so a valid provider
+    # fails this isinstance check and the raised TypeError escapes the loader
+    # guard, crashing plugin load with "Failed to load plugin '<name>':
+    # register_provider() expects a TranscriptionProvider instance, got <X>".
+    # Re-importing keeps this guard consistent with
+    # hermes_cli.plugins.register_transcription_provider, which already resolves
+    # the class at call time.
+    from agent.transcription_provider import TranscriptionProvider as _BaseProvider
+
+    if not isinstance(provider, _BaseProvider):
         raise TypeError(
             f"register_provider() expects a TranscriptionProvider instance, "
             f"got {type(provider).__name__}"
