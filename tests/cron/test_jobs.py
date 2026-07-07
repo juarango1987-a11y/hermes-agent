@@ -162,6 +162,37 @@ class TestNaiveScheduleTimezoneDivergence:
             f"one-shot should be due; next_run_at={job['next_run_at']}"
         )
 
+    def test_malformed_next_run_at_does_not_stall_other_jobs(self, tmp_cron_dir, monkeypatch):
+        # A single job with a non-ISO next_run_at (hand-edit / bad migration)
+        # must not crash the whole due scan and stall every other job.
+        now = datetime(2026, 6, 22, 20, 7, 30, tzinfo=timezone.utc)
+        monkeypatch.setattr("cron.jobs._hermes_now", lambda: now)
+
+        healthy_run_at = (now - timedelta(seconds=30)).isoformat()
+        poison = {
+            "id": "poison",
+            "enabled": True,
+            "schedule": {"kind": "interval", "minutes": 60},
+            "next_run_at": "soon",  # not ISO-8601 -> datetime.fromisoformat raises
+            "prompt": "poison",
+            "deliver": "local",
+        }
+        healthy = {
+            "id": "healthy",
+            "enabled": True,
+            "schedule": {"kind": "once", "run_at": healthy_run_at},
+            "next_run_at": healthy_run_at,  # 30s ago -> due within grace
+            "prompt": "healthy",
+            "deliver": "local",
+        }
+        # Poison first so the pre-fix crash happens before 'healthy' is reached.
+        save_jobs([poison, healthy])
+
+        due = get_due_jobs()  # must not raise
+        assert "healthy" in {d["id"] for d in due}, (
+            "a malformed sibling record must not stall healthy jobs"
+        )
+
 
 # =========================================================================
 # compute_next_run
