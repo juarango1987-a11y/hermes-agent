@@ -708,10 +708,16 @@ class CopilotACPClient:
                     content = ""
                 line = params.get("line")
                 limit = params.get("limit")
-                if isinstance(line, int) and line > 1:
+                # `line` (1-based start) and `limit` (max lines) are independent
+                # optional ACP params: honor `limit` even when reading from the
+                # top of the file (line missing or == 1), otherwise a bounded
+                # read silently returns the whole file.
+                has_line = isinstance(line, int) and line > 1
+                has_limit = isinstance(limit, int) and limit > 0
+                if has_line or has_limit:
                     lines = content.splitlines(keepends=True)
-                    start = line - 1
-                    end = start + limit if isinstance(limit, int) and limit > 0 else None
+                    start = line - 1 if has_line else 0
+                    end = start + limit if has_limit else None
                     content = "".join(lines[start:end])
                 if content:
                     content = redact_sensitive_text(content, force=True)
