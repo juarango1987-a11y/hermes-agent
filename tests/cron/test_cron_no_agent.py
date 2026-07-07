@@ -261,6 +261,68 @@ def test_run_job_no_agent_script_failure_delivers_error(hermes_env):
     assert "Cron watchdog" in final_response  # alert header
 
 
+def test_run_job_no_agent_runs_script_in_workdir(hermes_env, tmp_path):
+    """A no_agent job's ``workdir`` must become the subprocess cwd.
+
+    Regression for the workdir handling in the no_agent branch: the script
+    lives in HERMES_HOME/scripts/ (its parent dir), but when ``workdir`` is
+    set the subprocess must run IN workdir so scripts get predictable
+    relative paths. Before the fix the subprocess always ran in the script's
+    parent dir (the os.chdir dance never reached the child).
+    """
+    import os
+
+    from cron.jobs import create_job
+    from cron.scheduler import run_job
+
+    workdir = tmp_path / "job_workdir"
+    workdir.mkdir()
+
+    script_path = hermes_env / "scripts" / "pwd.py"
+    script_path.write_text("import os\nprint(os.getcwd())\n")
+
+    job = create_job(
+        prompt=None, schedule="every 5m", script="pwd.py", no_agent=True, deliver="local"
+    )
+    job["workdir"] = str(workdir)
+
+    success, doc, final_response, error = run_job(job)
+    assert success is True
+    assert error is None
+    assert os.path.realpath(final_response.strip()) == os.path.realpath(str(workdir))
+
+
+def test_run_job_no_agent_workdir_does_not_mutate_process_cwd(hermes_env, tmp_path):
+    """The no_agent workdir path must NOT call the process-global os.chdir().
+
+    A global os.chdir() runs outside the terminal RW-cwd lock and would leak
+    this job's cwd into a concurrently running workdir-less job. The workdir
+    must be applied per-subprocess (cwd=) instead, so os.chdir is never
+    invoked on the run_job path.
+    """
+    from unittest.mock import patch
+
+    from cron.jobs import create_job
+    from cron.scheduler import run_job
+
+    workdir = tmp_path / "job_workdir"
+    workdir.mkdir()
+
+    script_path = hermes_env / "scripts" / "alert.sh"
+    script_path.write_text("#!/bin/bash\necho hello\n")
+
+    job = create_job(
+        prompt=None, schedule="every 5m", script="alert.sh", no_agent=True, deliver="local"
+    )
+    job["workdir"] = str(workdir)
+
+    with patch("cron.scheduler.os.chdir") as chdir_mock:
+        success, doc, final_response, error = run_job(job)
+
+    assert success is True
+    chdir_mock.assert_not_called()
+
+
 def test_run_job_no_agent_never_invokes_aiagent(hermes_env):
     """no_agent jobs must NOT import/construct the AIAgent."""
     from cron.jobs import create_job
