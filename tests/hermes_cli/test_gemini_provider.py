@@ -272,6 +272,52 @@ class TestGeminiAgentInit:
         mock_openai.assert_called_once()
 
 
+# ── Provider aliases → native client selection (#thinking_config leak) ──
+
+class TestGeminiProviderAliasNativeSelection:
+    """The Gemini profile registers aliases ("google", "google-gemini",
+    "google-ai-studio"). Client selection must treat them like "gemini" and
+    build the native client for a native base_url; otherwise the request goes
+    through the plain OpenAI client, which forwards ``extra_body.thinking_config``
+    verbatim and Gemini's native REST endpoint rejects it with HTTP 400
+    ("Unknown name 'thinking_config'").
+    """
+
+    def test_is_gemini_provider_matches_canonical_and_aliases(self):
+        from agent.gemini_native_adapter import is_gemini_provider
+
+        for name in ("gemini", "google", "google-gemini", "google-ai-studio",
+                     "GOOGLE", "  Google-AI-Studio "):
+            assert is_gemini_provider(name) is True, name
+
+    def test_is_gemini_provider_rejects_others(self):
+        from agent.gemini_native_adapter import is_gemini_provider
+
+        for name in ("openai", "anthropic", "openrouter", "", None):
+            assert is_gemini_provider(name) is False, name
+
+    def test_google_alias_agent_uses_native_client(self, monkeypatch):
+        """AIAgent(provider='google', native base_url) must use GeminiNativeClient."""
+        monkeypatch.setenv("GOOGLE_API_KEY", "AIzaSy_REAL_KEY")
+        with patch("agent.gemini_native_adapter.GeminiNativeClient") as mock_client, \
+             patch("run_agent.OpenAI") as mock_openai, \
+             patch("run_agent.ContextCompressor") as mock_compressor:
+            mock_client.return_value = MagicMock()
+            mock_compressor.return_value = MagicMock(context_length=1048576, threshold_tokens=524288)
+            from run_agent import AIAgent
+            agent = AIAgent(
+                model="gemini-2.5-flash",
+                provider="google",
+                api_key="AIzaSy_REAL_KEY",
+                base_url="https://generativelanguage.googleapis.com/v1beta",
+            )
+            # Guard against silent normalization to the canonical name — the
+            # bug only reproduces when the alias survives to client selection.
+            assert agent.provider == "google"
+        assert mock_client.called
+        mock_openai.assert_not_called()
+
+
 # ── models.dev Integration ──
 
 class TestGeminiModelsDev:
